@@ -1,0 +1,21 @@
+{
+  "name": "pdf-compressor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_ENV=development PORT=3350 node server/index.js",
+    "build": "vite build",
+    "start": "NODE_ENV=production PORT=3351 node server/index.js"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "multer": "^2.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.2.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "vite": "^8.0.14"
+  }
+}
