@@ -5,7 +5,7 @@
 - Stack: Node.js, Express, Vite, React.
 - Distribution: Docker Compose obligatoire.
 - Image: conteneur unique servant l’API et le frontend.
-- Dev: port `3350`.
+- Dev: port `3350`, publié uniquement sur `127.0.0.1`.
 - Prod: port `3351`.
 - Compression: Ghostscript via commande `gs`.
 - Presets exposés: `screen`, `ebook`, `printer`, `prepress`, `default`.
@@ -14,7 +14,7 @@
 - Stockage temporaire: `tmpfs` Docker monté dans `/app/runtime` avec `uid=1000,gid=1000,mode=700`.
 - Rétention: suppression des fichiers source et compressés 10 minutes après génération.
 - Interface et documentation: français.
-- Hôte dev autorisé par Vite: `fouinaki-srv.gwap.ch`.
+- Hôte dev autorisé par Vite: `pdf-compressor.e-grisel.net`.
 - Mode expert Ghostscript ajouté: désactivé par défaut, options envoyées en JSON et validées côté backend avant construction des flags `gs`.
 - Utilisateur Docker non privilégié: le service tourne avec l’utilisateur `node`, pas `root`; le runtime temporaire est un `tmpfs` accessible à cet utilisateur.
 
