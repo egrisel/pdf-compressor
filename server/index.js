@@ -2,7 +2,7 @@ import express from "express";
 import multer from "multer";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,12 @@ const uploadDir = path.join(runtimeDir, "uploads");
 const outputDir = path.join(runtimeDir, "outputs");
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 50);
 const ttlMs = Number(process.env.FILE_TTL_MINUTES || 10) * 60 * 1000;
+const maxQueueSize = Number(process.env.MAX_QUEUE_SIZE || 20);
+const maxJobSeconds = Number(process.env.MAX_JOB_SECONDS || 120);
+const rateLimitWindowMs = Number(process.env.RATE_LIMIT_WINDOW_SECONDS || 60) * 1000;
+const rateLimitMaxJobs = Number(process.env.RATE_LIMIT_MAX_JOBS || 5);
+const maxStderrBytes = Number(process.env.MAX_GS_STDERR_BYTES || 8192);
+const genericCompressionError = "La compression a échoué. Vérifiez que le fichier est un PDF valide.";
 
 const presets = {
   screen: "Compression maximale, qualité adaptée à l'affichage écran.",
@@ -175,9 +181,21 @@ const upload = multer({
 
 const jobs = new Map();
 const queue = [];
+const rateLimitBuckets = new Map();
 let activeJobId = null;
 
-app.use(express.json());
+app.set("trust proxy", "loopback");
+app.disable("x-powered-by");
+if (isProduction) {
+  app.use(securityHeaders);
+}
+app.use(express.json({ limit: "16kb" }));
+
+setInterval(cleanupRateLimitBuckets, rateLimitWindowMs).unref();
+
+app.get("/healthz", (_req, res) => {
+  res.json({ status: "ok" });
+});
 
 app.get("/api/presets", (_req, res) => {
   res.json({ presets });
@@ -187,7 +205,7 @@ app.get("/api/expert-options", (_req, res) => {
   res.json({ options: publicExpertOptions() });
 });
 
-app.post("/api/jobs", upload.single("pdf"), (req, res) => {
+app.post("/api/jobs", rateLimitUploads, upload.single("pdf"), (req, res) => {
   const preset = req.body.preset;
   if (!Object.hasOwn(presets, preset)) {
     removeFile(req.file?.path);
@@ -197,6 +215,18 @@ app.post("/api/jobs", upload.single("pdf"), (req, res) => {
 
   if (!req.file) {
     res.status(400).json({ error: "Aucun PDF reçu." });
+    return;
+  }
+
+  if (!looksLikePdf(req.file.path)) {
+    removeFile(req.file.path);
+    res.status(400).json({ error: "Le fichier reçu ne semble pas être un PDF valide." });
+    return;
+  }
+
+  if (queue.length >= maxQueueSize) {
+    removeFile(req.file.path);
+    res.status(503).json({ error: "La file d'attente est pleine. Réessayez plus tard." });
     return;
   }
 
@@ -297,6 +327,7 @@ function processQueue() {
 
   const args = [
     "-sDEVICE=pdfwrite",
+    "-dSAFER",
     "-dCompatibilityLevel=" + (job.expertMode ? job.expertOptions.compatibilityLevel : "1.4"),
     "-dPDFSETTINGS=/" + job.preset,
     ...(job.expertMode ? buildExpertArgs(job.expertOptions) : []),
@@ -309,33 +340,57 @@ function processQueue() {
 
   const gs = spawn("gs", args, { stdio: ["ignore", "ignore", "pipe"] });
   let stderr = "";
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    gs.kill("SIGTERM");
+    setTimeout(() => {
+      if (job.status === "processing") {
+        gs.kill("SIGKILL");
+      }
+    }, 5000).unref();
+  }, maxJobSeconds * 1000);
+  timeout.unref();
 
   gs.stderr.on("data", (chunk) => {
-    stderr += chunk.toString();
+    if (stderr.length < maxStderrBytes) {
+      stderr = (stderr + chunk.toString()).slice(0, maxStderrBytes);
+    }
   });
 
   gs.on("error", (error) => {
-    finishJob(job, false, error.message);
+    clearTimeout(timeout);
+    finishJob(job, false, genericCompressionError, error.message);
   });
 
   gs.on("close", (code) => {
+    clearTimeout(timeout);
     if (job.status !== "processing") {
       return;
     }
     if (code === 0 && existsSync(job.outputPath)) {
       finishJob(job, true);
+    } else if (timedOut) {
+      finishJob(job, false, "La compression a dépassé le délai autorisé.", stderr || "Ghostscript timeout.");
     } else {
-      finishJob(job, false, stderr || "Ghostscript a quitté avec le code " + code + ".");
+      finishJob(job, false, genericCompressionError, stderr || "Ghostscript a quitté avec le code " + code + ".");
     }
   });
 }
 
-function finishJob(job, succeeded, error = null) {
+function finishJob(job, succeeded, error = null, errorDetail = null) {
   activeJobId = null;
   job.finishedAt = Date.now();
   job.expiresAt = job.finishedAt + ttlMs;
   job.status = succeeded ? "done" : "failed";
   job.error = error;
+  job.errorDetail = errorDetail;
+
+  logJob(job, succeeded ? "done" : "failed");
+
+  if (!succeeded) {
+    cleanupJobFiles(job);
+  }
 
   setTimeout(() => expireJob(job.id), ttlMs);
   processQueue();
@@ -430,7 +485,11 @@ function publicExpertOptions() {
 
 function compressedFilename(originalName) {
   const parsed = path.parse(originalName);
-  return (parsed.name || "document") + "-compresse.pdf";
+  const safeBaseName = (parsed.name || "document")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+  return (safeBaseName || "document") + "-compresse.pdf";
 }
 
 function removeFile(filePath) {
@@ -438,6 +497,10 @@ function removeFile(filePath) {
     return;
   }
   rm(filePath, { force: true }).catch(() => {});
+}
+
+function cleanupJobFiles(job) {
+  Promise.allSettled([rm(job.inputPath, { force: true }), rm(job.outputPath, { force: true })]).catch(() => {});
 }
 
 function cleanupRuntimeOnStart() {
@@ -456,4 +519,81 @@ function cleanupRuntimeOnStart() {
       }
     }
   }
+}
+
+function securityHeaders(_req, res, next) {
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Origin-Agent-Cluster", "?1");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
+  next();
+}
+
+function rateLimitUploads(req, res, next) {
+  const now = Date.now();
+  const key = req.ip || req.socket.remoteAddress || "unknown";
+  const bucket = rateLimitBuckets.get(key) || { count: 0, resetAt: now + rateLimitWindowMs };
+
+  if (now > bucket.resetAt) {
+    bucket.count = 0;
+    bucket.resetAt = now + rateLimitWindowMs;
+  }
+
+  bucket.count += 1;
+  rateLimitBuckets.set(key, bucket);
+
+  if (bucket.count > rateLimitMaxJobs) {
+    res.setHeader("Retry-After", Math.ceil((bucket.resetAt - now) / 1000));
+    res.status(429).json({ error: "Trop d'envois. Réessayez dans quelques instants." });
+    return;
+  }
+
+  next();
+}
+
+function cleanupRateLimitBuckets() {
+  const now = Date.now();
+  for (const [key, bucket] of rateLimitBuckets) {
+    if (now > bucket.resetAt) {
+      rateLimitBuckets.delete(key);
+    }
+  }
+}
+
+function looksLikePdf(filePath) {
+  let fd;
+  try {
+    fd = openSync(filePath, "r");
+    const buffer = Buffer.alloc(5);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    return bytesRead === buffer.length && buffer.toString("ascii") === "%PDF-";
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
+function logJob(job, event) {
+  const durationMs = job.startedAt && job.finishedAt ? job.finishedAt - job.startedAt : null;
+  const details = {
+    event,
+    jobId: job.id,
+    preset: job.preset,
+    expertMode: job.expertMode,
+    durationMs,
+    queueLength: queue.length
+  };
+
+  if (job.errorDetail) {
+    details.errorDetail = job.errorDetail;
+  }
+
+  console.log(JSON.stringify(details));
 }

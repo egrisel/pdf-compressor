@@ -10,6 +10,9 @@ L'utilisateur envoie un PDF, choisit un niveau de compression, attend le traitem
 - Compression avec les presets Ghostscript `screen`, `ebook`, `printer`, `prepress` et `default`.
 - Mode expert désactivé par défaut, avec options Ghostscript validées côté serveur.
 - File d'attente FIFO: une seule compression tourne à la fois.
+- File d'attente bornée et limite d'envois par adresse IP.
+- Timeout d'exécution Ghostscript pour éviter qu'un PDF bloque le service.
+- Validation serveur de la signature PDF avant compression.
 - Suppression automatique des fichiers source et compressés 10 minutes après génération.
 - Interface en français.
 
@@ -73,6 +76,25 @@ Ouvrez ensuite:
 http://localhost:3351
 ```
 
+Le compose de production publie le service uniquement sur `127.0.0.1:3351`. Pour une mise en ligne, exposez l'application via un frontal HTTPS placé sur la même machine ou le même réseau privé, et gardez le conteneur applicatif non exposé directement sur Internet.
+
+La surcharge `compose.prod.yml` applique aussi les recommandations suivantes:
+
+- Exécution avec l'utilisateur non privilégié `node`.
+- Filesystem conteneur en lecture seule.
+- Suppression des capabilities Linux avec `cap_drop: ALL`.
+- `no-new-privileges` activé.
+- Limites CPU, mémoire et nombre de processus.
+- Stockage temporaire en `tmpfs` avec taille bornée.
+- Healthcheck HTTP sur `/healthz`.
+
+Pour le frontal HTTPS, configurez au minimum:
+
+- Une limite d'upload cohérente avec `MAX_UPLOAD_MB`, par défaut 50 MB.
+- Des timeouts suffisants pour laisser passer une compression normale, mais bornés.
+- La transmission correcte des en-têtes `X-Forwarded-For` et `X-Forwarded-Proto`.
+- Des journaux d'accès et, si nécessaire, une authentification ou une allowlist IP.
+
 ## Commandes hors Docker
 
 Ces commandes sont utiles pour développer ou vérifier le frontend localement. Elles nécessitent que Ghostscript soit installé sur la machine si vous utilisez la compression.
@@ -111,7 +133,9 @@ Si plusieurs fichiers sont envoyés en même temps, les compressions sont trait�
 
 Les fichiers sont stockés dans `runtime/` pendant le traitement. En Docker, ce dossier est monté en `tmpfs` dans le conteneur.
 
-Les fichiers source et compressés ne doivent pas être versionnés. Ils sont supprimés automatiquement 10 minutes après la génération du PDF compressé.
+En production, le `tmpfs` `/app/runtime` est limité à 256 MB et `/tmp` à 64 MB. Ajustez ces tailles si vous augmentez `MAX_UPLOAD_MB`, `MAX_QUEUE_SIZE` ou si vos PDF produisent temporairement des sorties plus volumineuses.
+
+Les fichiers source et compressés ne doivent pas être versionnés. Ils sont supprimés automatiquement 10 minutes après la génération du PDF compressé. Les fichiers d'un job en échec sont supprimés immédiatement, tandis que le statut du job reste consultable jusqu'à expiration.
 
 ## API
 
@@ -122,6 +146,7 @@ L'interface utilise les routes suivantes:
 - `POST /api/jobs`: crée une compression à partir d'un champ fichier `pdf`.
 - `GET /api/jobs/:id`: lit le statut d'une compression.
 - `GET /api/jobs/:id/download`: télécharge le PDF compressé quand il est prêt.
+- `GET /healthz`: vérifie que le serveur répond.
 
 ## Configuration
 
@@ -132,3 +157,21 @@ Les principales variables d'environnement sont:
 - `RUNTIME_DIR`: dossier temporaire utilisé par l'application.
 - `MAX_UPLOAD_MB`: taille maximale d'un upload PDF, par défaut `50`.
 - `FILE_TTL_MINUTES`: durée de conservation des fichiers générés, par défaut `10`.
+- `MAX_QUEUE_SIZE`: nombre maximal de jobs en attente, par défaut `20`.
+- `MAX_JOB_SECONDS`: durée maximale d'une compression Ghostscript, par défaut `120`.
+- `RATE_LIMIT_WINDOW_SECONDS`: fenêtre de rate limit des uploads, par défaut `60`.
+- `RATE_LIMIT_MAX_JOBS`: nombre maximal d'uploads par IP dans la fenêtre, par défaut `5`.
+- `MAX_GS_STDERR_BYTES`: taille maximale de stderr Ghostscript conservée pour les logs internes, par défaut `8192`.
+
+## Recommandations Docker Compose
+
+Pour la production, gardez les protections présentes dans `compose.prod.yml`:
+
+- Publier le port applicatif sur l'adresse locale seulement: `127.0.0.1:3351:3351`.
+- Conserver `read_only: true`; seuls les chemins déclarés en `tmpfs` doivent être inscriptibles.
+- Conserver `cap_drop: ["ALL"]` et `security_opt: ["no-new-privileges:true"]`.
+- Conserver des limites explicites: `pids_limit`, `mem_limit`, `cpus`, tailles `tmpfs`.
+- Garder `RUNTIME_DIR=/app/runtime` sur un `tmpfs` non persistant.
+- Ne pas monter de volume persistant contenant des PDF utilisateurs.
+- Ne pas exécuter le service en `root`.
+- Rebuilder régulièrement l'image pour récupérer les correctifs Node.js, Debian et Ghostscript.

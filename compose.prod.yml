@@ -4,14 +4,35 @@ services:
       context: .
       target: production
     ports: !override
-      - "3351:3351"
+      - "127.0.0.1:3351:3351"
     user: node
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       NODE_ENV: production
       PORT: "3351"
       RUNTIME_DIR: /app/runtime
       MAX_UPLOAD_MB: "50"
       FILE_TTL_MINUTES: "10"
+      MAX_QUEUE_SIZE: "20"
+      MAX_JOB_SECONDS: "120"
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+      RATE_LIMIT_MAX_JOBS: "5"
     tmpfs: !override
-      - /app/runtime:uid=1000,gid=1000,mode=700
+      - /app/runtime:uid=1000,gid=1000,mode=700,size=256m
+      - /tmp:uid=1000,gid=1000,mode=700,size=64m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3351/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     command: node server/index.js
