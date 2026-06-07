@@ -22,7 +22,7 @@ PDF Compressor est une one-page app Dockerisée qui reçoit un PDF utilisateur, 
 - Les PDF uploadés sont limités à 50 MB.
 - Les presets Ghostscript exposés sont `screen`, `ebook`, `printer`, `prepress` et `default`.
 - Une seule compression tourne à la fois; les jobs suivants attendent en FIFO.
-- Les PDF source et compressés sont supprimés 10 minutes après la génération.
+- Les PDF source et compressés sont supprimés 5 minutes après la génération.
 - Ghostscript doit être fourni par l’image Docker, pas par la machine hôte.
 
 ## Architecture
@@ -41,4 +41,3 @@ PDF Compressor est une one-page app Dockerisée qui reçoit un PDF utilisateur, 
 - Garder l’interface en français.
 - Le mode expert Ghostscript doit rester désactivé par défaut et ne jamais accepter de flags libres non validés.
 - Vérifier les changements via Docker quand l’environnement le permet.
-

@@ -12,7 +12,7 @@
 - Upload maximal: `50 MB`.
 - Queue: FIFO avec une seule compression active.
 - Stockage temporaire: `tmpfs` Docker monté dans `/app/runtime` avec `uid=1000,gid=1000,mode=700`.
-- Rétention: suppression des fichiers source et compressés 10 minutes après génération.
+- Rétention: suppression des fichiers source et compressés 5 minutes après génération.
 - Interface et documentation: français.
 - Hôte dev autorisé par Vite: `pdf-compressor.e-grisel.net`.
 - Mode expert Ghostscript ajouté: désactivé par défaut, options envoyées en JSON et validées côté backend avant construction des flags `gs`.

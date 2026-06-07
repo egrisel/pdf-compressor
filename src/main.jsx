@@ -97,18 +97,25 @@ function App() {
   const [job, setJob] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [now, setNow] = useState(Date.now());
 
   const canSubmit = file && !isSubmitting && (!job || ["done", "failed"].includes(job.status));
+  const remainingSeconds = useMemo(() => {
+    if (!job?.expiresAt) {
+      return null;
+    }
+    return Math.max(0, Math.ceil((job.expiresAt - now) / 1000));
+  }, [job?.expiresAt, now]);
+  const isDownloadExpired = job?.status === "done" && remainingSeconds === 0;
 
   const expiresIn = useMemo(() => {
-    if (!job?.expiresAt) {
+    if (remainingSeconds === null) {
       return "";
     }
-    const seconds = Math.max(0, Math.ceil((job.expiresAt - Date.now()) / 1000));
-    const minutes = Math.floor(seconds / 60);
-    const rest = seconds % 60;
+    const minutes = Math.floor(remainingSeconds / 60);
+    const rest = remainingSeconds % 60;
     return minutes + " min " + rest.toString().padStart(2, "0") + " s";
-  }, [job]);
+  }, [remainingSeconds]);
 
   useEffect(() => {
     async function loadExpertOptions() {
@@ -152,6 +159,19 @@ function App() {
 
     return () => window.clearInterval(interval);
   }, [job]);
+
+  useEffect(() => {
+    if (job?.status !== "done" || !job.expiresAt || isDownloadExpired) {
+      return undefined;
+    }
+
+    setNow(Date.now());
+    const interval = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [job?.status, job?.expiresAt, isDownloadExpired]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -305,10 +325,20 @@ function App() {
             {job.status === "failed" && <p>{job.error || "La compression a échoué."}</p>}
             {job.status === "done" && (
               <div className="download-row">
-                <p>Le fichier expire dans {expiresIn || "moins d'une minute"}.</p>
-                <a className="download-button" href={job.downloadUrl}>
-                  Télécharger le PDF
-                </a>
+                <p>
+                  {isDownloadExpired
+                    ? "Le lien de téléchargement a expiré."
+                    : "Le fichier expire dans " + expiresIn + "."}
+                </p>
+                {isDownloadExpired ? (
+                  <span className="download-button disabled" aria-disabled="true">
+                    Télécharger le PDF
+                  </span>
+                ) : (
+                  <a className="download-button" href={job.downloadUrl}>
+                    Télécharger le PDF
+                  </a>
+                )}
               </div>
             )}
           </section>

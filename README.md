@@ -13,7 +13,7 @@ L'utilisateur envoie un PDF, choisit un niveau de compression, attend le traitem
 - File d'attente bornée et limite d'envois par adresse IP.
 - Timeout d'exécution Ghostscript pour éviter qu'un PDF bloque le service.
 - Validation serveur de la signature PDF avant compression.
-- Suppression automatique des fichiers source et compressés 10 minutes après génération.
+- Suppression automatique des fichiers source et compressés 5 minutes après génération.
 - Interface en français.
 
 ## Prérequis
@@ -135,7 +135,7 @@ Les fichiers sont stockés dans `runtime/` pendant le traitement. En Docker, ce 
 
 En production, le `tmpfs` `/app/runtime` est limité à 256 MB et `/tmp` à 64 MB. Ajustez ces tailles si vous augmentez `MAX_UPLOAD_MB`, `MAX_QUEUE_SIZE` ou si vos PDF produisent temporairement des sorties plus volumineuses.
 
-Les fichiers source et compressés ne doivent pas être versionnés. Ils sont supprimés automatiquement 10 minutes après la génération du PDF compressé. Les fichiers d'un job en échec sont supprimés immédiatement, tandis que le statut du job reste consultable jusqu'à expiration.
+Les fichiers source et compressés ne doivent pas être versionnés. Ils sont supprimés automatiquement 5 minutes après la génération du PDF compressé. Les fichiers d'un job en échec sont supprimés immédiatement, tandis que le statut du job reste consultable jusqu'à expiration.
 
 ## API
 
@@ -156,7 +156,7 @@ Les principales variables d'environnement sont:
 - `PORT`: port d'écoute du serveur.
 - `RUNTIME_DIR`: dossier temporaire utilisé par l'application.
 - `MAX_UPLOAD_MB`: taille maximale d'un upload PDF, par défaut `50`.
-- `FILE_TTL_MINUTES`: durée de conservation des fichiers générés, par défaut `10`.
+- `FILE_TTL_MINUTES`: durée de conservation des fichiers générés, par défaut `5`.
 - `MAX_QUEUE_SIZE`: nombre maximal de jobs en attente, par défaut `20`.
 - `MAX_JOB_SECONDS`: durée maximale d'une compression Ghostscript, par défaut `120`.
 - `RATE_LIMIT_WINDOW_SECONDS`: fenêtre de rate limit des uploads, par défaut `60`.
